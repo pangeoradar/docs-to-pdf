@@ -5,9 +5,12 @@ import { scrollPageToBottom } from 'puppeteer-autoscroll-down';
 import * as fs from 'fs-extra';
 import { chromeExecPath } from './browser';
 import * as utils from './utils';
+import slug from 'slug';
 
 console_stamp(console);
-
+const nanoid = () => {
+  return Math.random().toString(36).substr(2, 9);
+};
 let contentHTML = '';
 export interface GeneratePDFOptions {
   initialDocURLs: Array<string>;
@@ -71,7 +74,13 @@ export async function generatePDF({
     args: puppeteerArgs,
     protocolTimeout: protocolTimeout,
   });
-
+  const pageMap = new Map<string, string>();
+  const getAnchorByLink = (link: string) => {
+    return pageMap.get(link);
+  };
+  const setAnchorByLink = (link: string, anchor: string) => {
+    pageMap.set(link, anchor);
+  };
   const chromeTmpDataDir = browser
     .process()
     ?.spawnargs.find((arg) => arg.startsWith('--user-data-dir'))
@@ -90,6 +99,16 @@ export async function generatePDF({
   });
 
   console.debug(`InitialDocURLs: ${initialDocURLs}`);
+  await page.exposeFunction('slug', slug);
+  await page.exposeFunction('nanoid', nanoid);
+  await page.exposeFunction('getAnchorByLink', getAnchorByLink);
+  await page.exposeFunction('setAnchorByLink', setAnchorByLink);
+
+  page.on('console', (msg) => {
+    const msgType = msg.type();
+    const msgText = msg.text();
+    console.log(`PAGE LOG [${msgType}]: ${msgText}`);
+  });
   for (const url of initialDocURLs) {
     let nextPageURL = url;
     const urlPath = new URL(url).pathname;
@@ -123,6 +142,24 @@ export async function generatePDF({
         if (openDetail) {
           await utils.openDetails(page);
         }
+
+        // find h1 on page
+
+        await page.evaluate(async () => {
+          const h1 = document.querySelector('h1');
+          const link = window.location.href.split('/#')[0].replace(/\/$/, '');
+          if (!h1) {
+            setAnchorByLink(link, '');
+            return;
+          }
+          const h1Text = h1.textContent;
+          const id = await window.slug(`${h1Text}_${await nanoid()}`);
+
+          h1.setAttribute('id', id);
+
+          setAnchorByLink(link, id);
+        });
+
         // Get the HTML string of the content section.
         contentHTML += await utils.getHtmlContent(page, contentSelector);
         console.log(chalk.green('Success'));
@@ -152,7 +189,12 @@ export async function generatePDF({
   );
 
   // Generate Toc
-  const { modifiedContentHTML, tocHTML } = utils.generateToc(contentHTML);
+  // const html = utils.replaceLinkAnchors(contentHTML);
+  fs.writeFileSync('./content.txt', Array.from(pageMap.entries()).toString());
+  console.log('write content.txt', Array.from(pageMap.entries()).toString());
+
+  // Generate Toc
+  // const { modifiedContentHTML, tocHTML } = utils.generateToc(contentHTML);
 
   // Restructuring the HTML of a document
   console.log(chalk.cyan('Restructuring the html of a document...'));
@@ -163,17 +205,41 @@ export async function generatePDF({
   await page.evaluate(
     utils.concatHtml,
     coverHTML,
-    tocHTML,
-    modifiedContentHTML,
+    '',
+    contentHTML,
     disableTOC,
     baseUrl,
   );
-
+  await page.evaluate(async () => {
+    const matches = document.querySelectorAll('a');
+    console.log(matches.length, ' - matches 111111');
+  });
   // Remove unnecessary HTML by using excludeSelectors
   if (excludeSelectors) {
     console.log(chalk.cyan('Remove unnecessary HTML...'));
     await utils.removeExcludeSelector(page, excludeSelectors);
   }
+
+  await page.evaluate(async () => {
+    console.log(2);
+    const matches = document.querySelectorAll('a');
+    console.log(matches.length, ' - matches');
+    const filtered = Array.from(matches).map(async (a) => {
+      const link = a.href.split('#')[0].replace(/\/$/, '');
+      console.log('original href: ', a.href);
+      console.log('filter link href: ', link, a.textContent);
+      const anchor = await getAnchorByLink(link);
+      if (anchor) {
+        console.log('previous link href: ', a.href);
+        console.log('new link href: ', `#${anchor}`, a.textContent);
+        a.setAttribute('href', `#${anchor}`);
+      }
+
+      return a;
+    });
+
+    return Promise.resolve(2);
+  });
 
   // Add CSS to HTML
   if (cssStyle) {
@@ -184,7 +250,7 @@ export async function generatePDF({
   // Scroll to the bottom of the page with puppeteer-autoscroll-down
   // This forces lazy-loading images to load
   console.log(chalk.cyan('Scroll to the bottom of the page...'));
-  await scrollPageToBottom(page, {}); //cast to puppeteer-core type
+  await scrollPageToBottom(page, { delay: 0, size: 2000 }); //cast to puppeteer-core type
 
   // Generate PDF
   console.log(chalk.cyan('Generate PDF...'));

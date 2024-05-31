@@ -79,26 +79,23 @@ export async function openDetails(
   clickFunction?: ClickFunction,
   waitFunction?: WaitFunction,
 ) {
-  const detailsHandles = await page.$$('details');
+  const detailsHandles = await page.$$('main details');
 
   console.debug(`Found ${detailsHandles.length} elements`);
 
   for (const detailsHandle of detailsHandles) {
     const summaryHandle = await detailsHandle.$('summary');
     if (summaryHandle) {
-      console.debug(
-        `Clicking summary: ${await summaryHandle.evaluate(
-          (node) => node.textContent,
-        )}`,
-      );
       await (clickFunction
         ? clickFunction(summaryHandle)
-        : summaryHandle.click());
-      await (waitFunction
-        ? waitFunction(800)
-        : new Promise((r) => setTimeout(r, 800)));
+        : detailsHandle.evaluate((details) => (details.open = true)));
+      // await (waitFunction
+      //   ? waitFunction(800)
+      //   : new Promise((r) => setTimeout(r, 800)));
     }
   }
+
+  console.debug(`Finish opening details, on page`);
 }
 
 /**
@@ -238,6 +235,16 @@ export function generateCoverHtml(
     ${coverSub ? `<h3>${coverSub}</h3>` : ''}
     ${coverImageHtml}
   </div>`;
+}
+
+export function replaceLinkAnchors(contentHtml: string) {
+  const regexp = new RegExp(
+    /<a href="http:\/\/localhost(.+?)#(.+?)"(.+?)<\/a>/g,
+  );
+  return contentHtml.replace(regexp, (matchedStr, p1, p2, p3) => {
+    console.log('matched: ', matchedStr, p1, p2, p3);
+    return `<a href="${p1}" id="${p2}"${p3}</a>`;
+  });
 }
 
 /**
